@@ -1,0 +1,10 @@
+[package]
+name = "drain3_rust"
+version = "0.1.0"
+edition = "2021"
+description = "Rust implementation of the Drain3 log parsing algorithm"
+
+[dependencies]
+lru = "0.12"
+regex = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
