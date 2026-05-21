@@ -153,7 +153,6 @@ cargo test                # 12 unit tests
 
 - [ ] **Persistent storage** — save/load Drain state (JSON snapshots, file-based and Redis backends, matching Python Drain3's persistence modes)
 - [ ] **JaccardDrain** variant — alternative similarity metric
-- [ ] **Parameter extraction** — extract variable parts from matched templates
 - [ ] **Tree sharding** — partition the prefix tree to unlock true concurrent scaling at high volumes
 
 ## References
