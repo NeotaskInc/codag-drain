@@ -130,7 +130,7 @@ pub enum Role {
 }
 
 /// Per-slot statistics rendered inside a collapsed line.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SlotStat {
     pub numeric: bool,
     pub min: f64,
@@ -142,7 +142,8 @@ pub struct SlotStat {
 }
 
 /// One output line: either kept verbatim or a collapsed group/tail summary.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OutputLine {
     Kept {
         index: usize,
@@ -183,6 +184,32 @@ impl CompressionResult {
         }
         self.original_count as f64 / self.lines.len() as f64
     }
+
+    /// A `serde::Serialize`-able JSON view of this result (for the HTTP API).
+    /// Borrows the output lines (no clone) and carries the precomputed summary
+    /// fields plus the rendered text.
+    pub fn as_json(&self) -> CapsuleJson<'_> {
+        CapsuleJson {
+            lines: &self.lines,
+            original_count: self.original_count,
+            kept_count: self.kept_count,
+            line_compression: self.line_compression(),
+            rendered: self.render(),
+        }
+    }
+}
+
+/// Serializable JSON projection of a [`CompressionResult`] for the HTTP API.
+///
+/// Borrows the output `lines` from the owning result; the rest are
+/// precomputed scalars + the rendered text body.
+#[derive(Debug, serde::Serialize)]
+pub struct CapsuleJson<'a> {
+    pub lines: &'a [OutputLine],
+    pub original_count: usize,
+    pub kept_count: usize,
+    pub line_compression: f64,
+    pub rendered: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -722,6 +749,30 @@ mod tests {
         assert_eq!(fmt_num(20.0), "20");
         assert_eq!(fmt_num(0.8), "0.8");
         assert_eq!(fmt_num(2.50), "2.5");
+    }
+
+    #[test]
+    fn capsule_json_serializes() {
+        let lines = db_pool_cascade();
+        let result = compress(&lines, &CompressorConfig::for_mode(Mode::Balanced));
+        let json = serde_json::to_value(result.as_json()).expect("serialize");
+        assert!(json.get("lines").unwrap().is_array());
+        assert_eq!(
+            json.get("original_count").unwrap().as_u64().unwrap() as usize,
+            result.original_count
+        );
+        assert_eq!(
+            json.get("kept_count").unwrap().as_u64().unwrap() as usize,
+            result.kept_count
+        );
+        assert!(json.get("line_compression").is_some());
+        assert_eq!(
+            json.get("rendered").unwrap().as_str().unwrap(),
+            result.render()
+        );
+        // OutputLine variants carry a `kind` discriminant tag.
+        let first = &json.get("lines").unwrap().as_array().unwrap()[0];
+        assert!(first.get("kind").is_some());
     }
 
     #[test]

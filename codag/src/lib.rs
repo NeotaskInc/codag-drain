@@ -21,8 +21,8 @@ pub mod stream;
 
 // Public re-exports (Phase 1 compression library).
 pub use compress::{
-    compress, compress_groups, CompressionResult, CompressorConfig, GrouperKind, LogLine, Mode,
-    OutputLine, Role, SlotStat,
+    compress, compress_groups, CapsuleJson, CompressionResult, CompressorConfig, GrouperKind,
+    LogLine, Mode, OutputLine, Role, SlotStat,
 };
 
 // Public re-exports (Phase 2 streaming index).

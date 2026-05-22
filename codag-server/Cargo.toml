@@ -6,4 +6,17 @@ description = "codag real-time capsule daemon — agents stream logs in and subs
 
 [dependencies]
 codag = { path = "../codag" }
-# axum/tokio/tower land in Phase 3 (kept minimal until the library neck is solid).
+regex = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"] }
+axum = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tower = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio-stream = "0.1"
+futures = "0.3"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

@@ -118,8 +118,22 @@ impl StreamingIndex {
 
     /// Assemble the canonical group `Vec` (identical ordering to
     /// `StructuralExactGrouper::group` on the same lines) and project a
-    /// [`CompressionResult`] via the shared post-grouping pipeline.
+    /// [`CompressionResult`] via the shared post-grouping pipeline, using the
+    /// index's stored [`CompressorConfig`].
     pub fn capsule(&self) -> CompressionResult {
+        self.capsule_with(&self.config)
+    }
+
+    /// Project a [`CompressionResult`] using a **per-request** `config` instead
+    /// of the index's stored one.
+    ///
+    /// Grouping is structural-only and already settled by `push`, so this just
+    /// re-runs the shared post-grouping pipeline ([`compress_groups`]) with the
+    /// given config — letting one streamed session be projected at different
+    /// modes/budgets (lossless / balanced / aggressive) on demand. The `config`'s
+    /// `grouper` field is ignored (streaming is always structural), exactly as
+    /// [`StreamingIndex::new`] documents.
+    pub fn capsule_with(&self, config: &CompressorConfig) -> CompressionResult {
         if self.lines.is_empty() {
             return CompressionResult {
                 lines: Vec::new(),
@@ -128,7 +142,7 @@ impl StreamingIndex {
             };
         }
         let groups = self.finalize_groups();
-        compress_groups(&self.lines, &groups, &self.config)
+        compress_groups(&self.lines, &groups, config)
     }
 
     /// Reproduce `grouper::finalize`: members ascending (already true by
@@ -369,6 +383,46 @@ mod tests {
         let b = pushed(&lines, &cfg).capsule();
         assert_eq!(a.render(), b.render());
         assert_eq!(a.lines, b.lines);
+    }
+
+    // ----- capsule_with(per-request config) parity. -----
+
+    #[test]
+    fn capsule_with_per_request_config_matches_batch() {
+        // An index built with one config, projected with a *different* per-request
+        // config, must equal a batch structural compress at that config.
+        let lines = db_pool_cascade();
+        // Build the index at Lossless, then project at Balanced via capsule_with.
+        let idx = pushed(&lines, &cfg_structural(Mode::Lossless));
+        let balanced = cfg_structural(Mode::Balanced);
+        let projected = idx.capsule_with(&balanced);
+        let batch = compress(&lines, &balanced);
+        assert_eq!(projected.render(), batch.render());
+        assert_eq!(projected.lines, batch.lines);
+        assert_eq!(projected.original_count, batch.original_count);
+        assert_eq!(projected.kept_count, batch.kept_count);
+    }
+
+    #[test]
+    fn capsule_with_all_modes_diverse() {
+        let lines = diverse_multi_template();
+        let idx = pushed(&lines, &cfg_structural(Mode::Lossless));
+        for mode in [Mode::Lossless, Mode::Balanced, Mode::Aggressive] {
+            let cfg = cfg_structural(mode);
+            assert_eq!(
+                idx.capsule_with(&cfg).render(),
+                compress(&lines, &cfg).render(),
+                "capsule_with mismatch at {mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn capsule_equals_capsule_with_stored_config() {
+        let lines = diverse_multi_template();
+        let cfg = cfg_structural(Mode::Aggressive);
+        let idx = pushed(&lines, &cfg);
+        assert_eq!(idx.capsule().render(), idx.capsule_with(&cfg).render());
     }
 
     #[test]
