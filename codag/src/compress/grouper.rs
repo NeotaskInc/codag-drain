@@ -122,6 +122,16 @@ pub struct FixedDepthTree {
     pub jaccard_th: f64,
 }
 
+impl FixedDepthTree {
+    /// Construct with an explicit prefix length and Jaccard merge threshold.
+    pub fn new(prefix_len: usize, jaccard_th: f64) -> Self {
+        FixedDepthTree {
+            prefix_len,
+            jaccard_th,
+        }
+    }
+}
+
 impl Grouper for FixedDepthTree {
     fn group(&self, lines: &[LogLine], norm: &Normalizer, guard: &Guard) -> Vec<Group> {
         // (length, prefix) -> list of (canonical masked tokens, member indices)
