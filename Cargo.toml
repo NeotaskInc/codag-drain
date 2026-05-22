@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["drain3_rust", "codag", "codag-server"]
+
+# codag-drain workspace
+#   drain3_rust  — base streaming Drain3 fork (untouched)
+#   codag        — compression + capsule + streaming-index engine (the IP)
+#   codag-server — long-running real-time capsule daemon

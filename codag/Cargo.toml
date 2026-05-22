@@ -1,0 +1,14 @@
+[package]
+name = "codag"
+version = "0.1.0"
+edition = "2021"
+description = "codag — real-time, evidence-preserving log capsule engine (compression + capsule + streaming index) built on the Drain3 core."
+
+[dependencies]
+drain3_rust = { path = "../drain3_rust" }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+csv = "1"

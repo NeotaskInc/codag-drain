@@ -1,0 +1,9 @@
+[package]
+name = "codag-server"
+version = "0.1.0"
+edition = "2021"
+description = "codag real-time capsule daemon — agents stream logs in and subscribe to live IncidentCapsules."
+
+[dependencies]
+codag = { path = "../codag" }
+# axum/tokio/tower land in Phase 3 (kept minimal until the library neck is solid).
