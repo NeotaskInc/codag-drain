@@ -15,7 +15,7 @@ pub mod profile;
 pub mod role;
 pub mod template;
 
-use grouper::make_grouper;
+use grouper::{make_grouper, Group};
 use guard::Guard;
 use normalize::Normalizer;
 use profile::{distinct_samples, Profile};
@@ -336,9 +336,42 @@ fn trailing_alpha_unit(s: &str) -> String {
 }
 
 /// Compress `lines` per the NEW keep-policy.
+///
+/// Flow: build groups via the configured grouper, then run the shared
+/// post-grouping pipeline ([`compress_groups`]).
 pub fn compress(lines: &[LogLine], config: &CompressorConfig) -> CompressionResult {
+    if lines.is_empty() {
+        return CompressionResult {
+            lines: Vec::new(),
+            original_count: 0,
+            kept_count: 0,
+        };
+    }
+
+    // 1. Group.
     let norm = Normalizer::new();
     let guard = Guard::new();
+    let grouper = make_grouper(config.grouper, config.prefix_len, config.jaccard_th);
+    let groups = grouper.group(lines, &norm, &guard);
+
+    // 2..5. Profile + keep-policy + emit (shared with the streaming index).
+    compress_groups(lines, &groups, config)
+}
+
+/// Everything AFTER grouping: `Profile::build` + the keep-policy + chronological
+/// emit. Shared between the batch [`compress`] entry point and the streaming
+/// index ([`crate::stream::StreamingIndex`]), so that — given identical `groups`
+/// — both produce byte-for-byte identical output.
+///
+/// `groups` must be in the canonical order produced by the groupers (groups by
+/// ascending first-member index, members ascending), as that ordering is load
+/// bearing for the chronological emit and the per-group profiles.
+pub fn compress_groups(
+    lines: &[LogLine],
+    groups: &[Group],
+    config: &CompressorConfig,
+) -> CompressionResult {
+    let norm = Normalizer::new();
     let original_count = lines.len();
 
     if lines.is_empty() {
@@ -349,12 +382,8 @@ pub fn compress(lines: &[LogLine], config: &CompressorConfig) -> CompressionResu
         };
     }
 
-    // 1. Group.
-    let grouper = make_grouper(config.grouper, config.prefix_len, config.jaccard_th);
-    let groups = grouper.group(lines, &norm, &guard);
-
     // 2. Profile.
-    let profile = Profile::build(lines, &groups, &norm, config.outlier_factor);
+    let profile = Profile::build(lines, groups, &norm, config.outlier_factor);
     let gid = &profile.gid;
 
     // 3. Keep set.

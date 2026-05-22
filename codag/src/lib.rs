@@ -17,10 +17,13 @@
 // Phase 1+ modules are declared here as they land:
 pub mod compress;
 // pub mod capsule;
-// pub mod stream;
+pub mod stream;
 
 // Public re-exports (Phase 1 compression library).
 pub use compress::{
-    compress, CompressionResult, CompressorConfig, GrouperKind, LogLine, Mode, OutputLine, Role,
-    SlotStat,
+    compress, compress_groups, CompressionResult, CompressorConfig, GrouperKind, LogLine, Mode,
+    OutputLine, Role, SlotStat,
 };
+
+// Public re-exports (Phase 2 streaming index).
+pub use stream::StreamingIndex;
