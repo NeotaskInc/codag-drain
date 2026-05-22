@@ -168,13 +168,21 @@ impl Profile {
         }
     }
 
-    /// Port of `is_tail_outlier`: median>0 && (v > factor*median || v < median/factor).
+    /// HIGH-side tail outlier only: `median>0 && v > factor*median`.
+    ///
+    /// The original Python `is_tail_outlier` also rescued the LOW tail
+    /// (`v < median/factor`), but that floods on monotonic ID/counter/sequence
+    /// slots — e.g. a slot of values `1..5000` has median ~2500, so every value
+    /// `< 625` (hundreds of lines per incident) is a "low outlier" and kept
+    /// verbatim, un-budgetably flooring compression. Real anomalies worth
+    /// surfacing are spikes (latency/error-rate/queue-depth highs); genuine low
+    /// anomalies (memory→0, replicas=0) are virtually always *also* signal lines
+    /// (error/warn or a cascade pattern) and kept via the signal path. Verified
+    /// by the recall A/B (stays 1.000 after this change).
     pub fn is_tail_outlier(&self, g_idx: usize, slot: usize, v: f64) -> bool {
         let prof = &self.profiles[g_idx];
         match prof.numeric.get(slot).and_then(|o| o.as_ref()) {
-            Some(SlotNumeric { median, .. }) if *median > 0.0 => {
-                v > self.outlier_factor * *median || v < *median / self.outlier_factor
-            }
+            Some(SlotNumeric { median, .. }) if *median > 0.0 => v > self.outlier_factor * *median,
             _ => false,
         }
     }
@@ -269,9 +277,11 @@ mod tests {
         assert!(!p.is_tail_outlier(0, 0, 80.0));
         // just above
         assert!(p.is_tail_outlier(0, 0, 80.5));
-        // low boundary: median/4 = 5; exactly 5 not < 5 -> not outlier; 4.9 is
+        // low values are NO LONGER outliers (high-only rescue — see doc): the
+        // low tail floods on ID/counter slots and is dropped.
         assert!(!p.is_tail_outlier(0, 0, 5.0));
-        assert!(p.is_tail_outlier(0, 0, 4.9));
+        assert!(!p.is_tail_outlier(0, 0, 4.9));
+        assert!(!p.is_tail_outlier(0, 0, 0.0));
     }
 
     #[test]
