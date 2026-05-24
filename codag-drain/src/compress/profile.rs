@@ -1,4 +1,4 @@
-//! Per-group template + per-slot numeric profiling.
+//! Per-group template + per-slot profiling.
 //!
 //! Adapted from the `Profile` class in
 //! `codag-bench/scripts/det_compressors.py`. For each group we derive a template
@@ -6,18 +6,19 @@
 //! 1), compile a `regex_from_placeholder` capture regex, capture each line's raw
 //! slot strings, and compute per-slot numeric `(min, median, max)` over ALL
 //! parsed values (a slot is numeric iff >= 50% of present values parse as a
-//! number). The median is over the FULL list (incl. duplicates), not distinct.
+//! number). The median is over the FULL list (including duplicates), not
+//! distinct.
 
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use crate::compress::grouper::Group;
-use crate::compress::normalize::Normalizer;
-use crate::compress::template::{derive_pair_template, regex_from_placeholder};
+use crate::compress::lex::{derive_lex_template, lex};
+use crate::compress::template::{derive_multi_template, regex_from_placeholder};
 use crate::compress::LogLine;
 
-/// `NUM = re.compile(r"-?\d+(?:\.\d+)?")` — first numeric substring of a slot.
+/// `NUM = re.compile(r"-?\d+(?:\.\d+)?")` - first numeric substring of a slot.
 fn num_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"-?\d+(?:\.\d+)?").unwrap())
@@ -47,14 +48,12 @@ pub struct GroupProfile {
     pub numeric: Vec<Option<SlotNumeric>>,
 }
 
-/// The full incident profile: one `GroupProfile` per group, plus the per-line
-/// group assignment.
+/// One `GroupProfile` per group, plus the per-line group assignment.
 #[derive(Debug, Clone)]
 pub struct Profile {
     /// gid[line_index] = group index (into `groups` / `profiles`).
     pub gid: Vec<usize>,
     pub profiles: Vec<GroupProfile>,
-    pub outlier_factor: f64,
 }
 
 /// Median over the FULL slice (incl. duplicates). Sorts a copy. Even-length =
@@ -76,12 +75,7 @@ fn median(values: &[f64]) -> f64 {
 impl Profile {
     /// Build the profile. `groups` are emitted in ascending first-member-index
     /// order; `gid[i]` maps line `i` to its group index.
-    pub fn build(
-        lines: &[LogLine],
-        groups: &[Group],
-        norm: &Normalizer,
-        outlier_factor: f64,
-    ) -> Profile {
+    pub fn build(lines: &[LogLine], groups: &[Group]) -> Profile {
         let mut gid = vec![0usize; lines.len()];
         for (g_idx, g) in groups.iter().enumerate() {
             for &m in &g.member_indices {
@@ -92,17 +86,24 @@ impl Profile {
         let mut profiles: Vec<GroupProfile> = Vec::with_capacity(groups.len());
         for g in groups {
             let members = &g.member_indices;
-            // Derive template from members[0] vs members[1] (or [0] alone).
+            // Derive a multi-member lexical template first so compact JSON/logfmt
+            // and alpha-only variables are visible without domain regexes.
             let a_raw = &lines[members[0]].message;
-            let a_norm = norm.normalize_for_grouping(a_raw);
-            let b_norm = if members.len() > 1 {
-                norm.normalize_for_grouping(&lines[members[1]].message)
-            } else {
-                a_norm.clone()
+            let members_lex: Vec<_> = members.iter().map(|&m| lex(&lines[m].message)).collect();
+            let template = match derive_lex_template(a_raw, &members_lex) {
+                Some(t) => t,
+                None => {
+                    let members_norm: Vec<Vec<String>> = members
+                        .iter()
+                        .map(|&m| whitespace_tokens(&lines[m].message))
+                        .collect();
+                    derive_multi_template(a_raw, &members_norm)
+                }
             };
-            let template = derive_pair_template(a_raw, &a_norm, &b_norm);
             let regex = regex_from_placeholder(&template);
-            let slot_count = template.matches(crate::compress::template::PLACEHOLDER).count();
+            let slot_count = template
+                .matches(crate::compress::template::PLACEHOLDER)
+                .count();
 
             // Capture raw slot strings per member.
             let mut raw_slots: Vec<Vec<Option<String>>> = Vec::with_capacity(members.len());
@@ -161,30 +162,7 @@ impl Profile {
             });
         }
 
-        Profile {
-            gid,
-            profiles,
-            outlier_factor,
-        }
-    }
-
-    /// HIGH-side tail outlier only: `median>0 && v > factor*median`.
-    ///
-    /// The original Python `is_tail_outlier` also rescued the LOW tail
-    /// (`v < median/factor`), but that floods on monotonic ID/counter/sequence
-    /// slots — e.g. a slot of values `1..5000` has median ~2500, so every value
-    /// `< 625` (hundreds of lines per incident) is a "low outlier" and kept
-    /// verbatim, un-budgetably flooring compression. Real anomalies worth
-    /// surfacing are spikes (latency/error-rate/queue-depth highs); genuine low
-    /// anomalies (memory→0, replicas=0) are virtually always *also* signal lines
-    /// (error/warn or a cascade pattern) and kept via the signal path. Verified
-    /// by the recall A/B (stays 1.000 after this change).
-    pub fn is_tail_outlier(&self, g_idx: usize, slot: usize, v: f64) -> bool {
-        let prof = &self.profiles[g_idx];
-        match prof.numeric.get(slot).and_then(|o| o.as_ref()) {
-            Some(SlotNumeric { median, .. }) if *median > 0.0 => v > self.outlier_factor * *median,
-            _ => false,
-        }
+        Profile { gid, profiles }
     }
 
     /// Parse the numeric value of a captured slot string (first numeric match).
@@ -195,14 +173,14 @@ impl Profile {
     }
 }
 
+fn whitespace_tokens(line: &str) -> Vec<String> {
+    line.split_whitespace().map(|s| s.to_string()).collect()
+}
+
 /// Capture the `<*>` slot raw strings for a line. Returns a vector of length
 /// `slot_count`; entries are None when the regex doesn't match. LibreLog comma /
 /// whitespace normalization is applied before matching.
-pub fn capture_slots(
-    regex: Option<&Regex>,
-    msg: &str,
-    slot_count: usize,
-) -> Vec<Option<String>> {
+pub fn capture_slots(regex: Option<&Regex>, msg: &str, slot_count: usize) -> Vec<Option<String>> {
     let re = match regex {
         Some(r) => r,
         None => return vec![None; slot_count],
@@ -236,8 +214,7 @@ pub fn distinct_samples(values: &[Option<String>], cap: usize) -> (Vec<String>, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compress::grouper::{Grouper, StructuralExactGrouper};
-    use crate::compress::guard::Guard;
+    use crate::compress::grouper::Group;
 
     fn lines_of(msgs: &[&str]) -> Vec<LogLine> {
         msgs.iter().map(|m| LogLine::new(m.to_string())).collect()
@@ -258,39 +235,13 @@ mod tests {
     }
 
     #[test]
-    fn outlier_at_boundary() {
-        let lines = lines_of(&[
-            "latency ms 20",
-            "latency ms 20",
-            "latency ms 20",
-            "latency ms 8400",
-        ]);
-        let norm = Normalizer::new();
-        let groups = StructuralExactGrouper.group(&lines, &norm, &Guard::new());
-        let p = Profile::build(&lines, &groups, &norm, 4.0);
-        // group 0, slot 0, median 20.
-        // v=8400 > 4*20=80 -> outlier
-        assert!(p.is_tail_outlier(0, 0, 8400.0));
-        // v=20 not outlier
-        assert!(!p.is_tail_outlier(0, 0, 20.0));
-        // boundary: exactly 4*median = 80 is NOT > 80 -> not outlier
-        assert!(!p.is_tail_outlier(0, 0, 80.0));
-        // just above
-        assert!(p.is_tail_outlier(0, 0, 80.5));
-        // low values are NO LONGER outliers (high-only rescue — see doc): the
-        // low tail floods on ID/counter slots and is dropped.
-        assert!(!p.is_tail_outlier(0, 0, 5.0));
-        assert!(!p.is_tail_outlier(0, 0, 4.9));
-        assert!(!p.is_tail_outlier(0, 0, 0.0));
-    }
-
-    #[test]
     fn numeric_detection_majority() {
         // slot mostly numeric -> numeric profile
         let lines = lines_of(&["count is 1", "count is 2", "count is 3"]);
-        let norm = Normalizer::new();
-        let groups = StructuralExactGrouper.group(&lines, &norm, &Guard::new());
-        let p = Profile::build(&lines, &groups, &norm, 4.0);
+        let groups = vec![Group {
+            member_indices: vec![0, 1, 2],
+        }];
+        let p = Profile::build(&lines, &groups);
         assert!(p.profiles[0].numeric[0].is_some());
     }
 }

@@ -1,8 +1,10 @@
 [package]
-name = "codag"
+name = "codag-drain"
 version = "0.1.0"
 edition = "2021"
-description = "codag — real-time, evidence-preserving log capsule engine (compression + capsule + streaming index) built on the Drain3 core."
+description = "codag-drain - deterministic log templating adapted from Drain3 for codag wrap."
+license = "MIT"
+keywords = ["logs", "templating", "drain3"]
 
 [dependencies]
 drain3_rust = { path = "../drain3_rust" }

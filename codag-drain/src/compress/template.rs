@@ -1,11 +1,8 @@
 //! Template derivation + regex compilation.
 //!
-//! Ports the template-relevant pieces of:
-//!   - `grouping.py`: `_template_token`, `_collapse_placeholders`,
-//!     `derive_pair_template`, `_VAR_RE`.
-//!   - `memory.py`: `regex_from_placeholder`, `is_useful_template`,
-//!     `_strip_commas`.
-//!   - `det_compressors.py`: per-pair derivation usage.
+//! The grouping step is Drain-style and data-driven. This module only turns an
+//! already-formed group into a conservative `<*>` template and a capture regex
+//! for slot summaries.
 //!
 //! DIVERGENCE: the Python `derive_pair_template` uses `difflib.SequenceMatcher`.
 //! We implement an in-crate LCS `get_opcodes` (classic DP over the two token
@@ -18,42 +15,21 @@
 //! wrong-but-accepted one.
 
 use regex::Regex;
-use std::sync::OnceLock;
 
 pub const PLACEHOLDER: &str = "<*>";
 const REGEX_VAR: &str = "(.*?)";
 const ALLOWED_NOISE_PUNCT: &str = r##"!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"##;
 
-/// `var_regex()` — the compiled regex used to decide if a normalized token is a
-/// sentinel/variable. Mirrors `_VAR_RE` in grouping.py.
-pub fn var_regex() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r"(?i)<(?:LEVEL|NUM|HTTP_[1-5]XX|VAR|ID|ADDR|STR|VAL)>").unwrap()
-    })
-}
-
-/// Port of `_is_var_token`: fullmatch of `_VAR_RE`, or the literal `<VAR>`.
-fn is_var_token(token: &str) -> bool {
-    if token == "<VAR>" {
-        return true;
-    }
-    // fullmatch semantics: the regex must consume the whole string.
-    var_regex()
-        .find(token)
-        .map(|m| m.start() == 0 && m.end() == token.len())
-        .unwrap_or(false)
-}
-
-/// Port of `_template_token`.
 fn template_token(raw: &str, normalized: &str) -> String {
-    if is_var_token(normalized) {
-        return PLACEHOLDER.to_string();
+    if normalized == PLACEHOLDER {
+        PLACEHOLDER.to_string()
+    } else {
+        raw.to_string()
     }
-    if var_regex().is_match(normalized) {
-        return var_regex().replace_all(normalized, PLACEHOLDER).into_owned();
-    }
-    raw.to_string()
+}
+
+fn tokenize(line: &str) -> Vec<String> {
+    line.split_whitespace().map(|s| s.to_string()).collect()
 }
 
 /// Port of `_collapse_placeholders`: drop a `<*>` that immediately follows
@@ -178,12 +154,11 @@ pub fn get_opcodes(a: &[String], b: &[String]) -> Vec<OpCode> {
 // Template derivation
 // ---------------------------------------------------------------------------
 
-/// Port of `derive_pair_template(a_raw, a_norm, b_norm)`.
 /// Returns a conservative wildcard template (space-joined, placeholders
 /// collapsed) from two normalized token lists, using `a_raw`'s tokens for the
 /// equal-run static text.
 pub fn derive_pair_template(a_raw: &str, a_norm: &[String], b_norm: &[String]) -> String {
-    let a_tokens = super::normalize::tokenize(a_raw);
+    let a_tokens = tokenize(a_raw);
     let ops = get_opcodes(a_norm, b_norm);
     let mut out: Vec<String> = Vec::new();
     for op in ops {
@@ -213,8 +188,7 @@ pub fn derive_multi_template(a_raw: &str, members_norm: &[Vec<String>]) -> Strin
         return String::new();
     }
     if members_norm.len() == 1 {
-        // Single member: derive against itself -> all-static (no placeholders),
-        // mapping any sentinel tokens to `<*>` per `_template_token`.
+        // Single member: derive against itself -> all-static.
         return derive_pair_template(a_raw, &members_norm[0], &members_norm[0]);
     }
     let len0 = members_norm[0].len();
@@ -223,7 +197,7 @@ pub fn derive_multi_template(a_raw: &str, members_norm: &[Vec<String>]) -> Strin
         // Fall back to pair derivation (member[0] vs member[1]).
         return derive_pair_template(a_raw, &members_norm[0], &members_norm[1]);
     }
-    let a_tokens = super::normalize::tokenize(a_raw);
+    let a_tokens = tokenize(a_raw);
     let mut out: Vec<String> = Vec::with_capacity(len0);
     for pos in 0..len0 {
         let first = &members_norm[0][pos];
@@ -253,14 +227,14 @@ fn strip_commas(s: &str) -> String {
 /// Port of `regex_from_placeholder`, returning a *compiled* anchored regex.
 /// `<*>` -> `(.*?)`, the rest escaped, commas stripped, anchored `^...$`.
 /// Returns `None` if the pattern fails to compile OR has no static anchor
-/// (i.e. the template is all placeholders / not useful — `is_useful_template`
+/// (i.e. the template is all placeholders / not useful - `is_useful_template`
 /// false), matching the contract in the task spec.
 pub fn regex_from_placeholder(template_text: &str) -> Option<Regex> {
     let pattern = regex_string_from_placeholder(template_text)?;
     Regex::new(&pattern).ok()
 }
 
-/// True if the template has at least one *static anchor* — a non-placeholder,
+/// True if the template has at least one *static anchor* - a non-placeholder,
 /// non-punctuation, non-whitespace char. A template that is all placeholders /
 /// punctuation (`<*>`, `<*> <*>`, `: <*>`) has no anchor and would match nearly
 /// every line, so its regex is refused.
@@ -317,8 +291,8 @@ mod tests {
 
     #[test]
     fn lcs_opcodes_equal_and_gap() {
-        let a = v(&["acquired", "connection", "in_use", "<NUM>"]);
-        let b = v(&["acquired", "connection", "in_use", "<NUM>"]);
+        let a = v(&["acquired", "connection", "in_use", "5"]);
+        let b = v(&["acquired", "connection", "in_use", "5"]);
         let ops = get_opcodes(&a, &b);
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].tag, OpTag::Equal);
@@ -343,10 +317,9 @@ mod tests {
     fn derive_pair_static_vs_vary() {
         // members differ at one token -> that becomes <*>.
         let a_raw = "acquired connection in_use 5";
-        let a_norm = v(&["acquired", "connection", "in_use", "<NUM>"]);
-        let b_norm = v(&["acquired", "connection", "in_use", "<NUM>"]);
+        let a_norm = v(&["acquired", "connection", "in_use", "5"]);
+        let b_norm = v(&["acquired", "connection", "in_use", "4218"]);
         let t = derive_pair_template(a_raw, &a_norm, &b_norm);
-        // <NUM> sentinel maps to <*>
         assert_eq!(t, "acquired connection in_use <*>");
     }
 
@@ -355,7 +328,10 @@ mod tests {
         let t = "acquired connection in_use <*>";
         let re = regex_from_placeholder(t).unwrap();
         assert!(template_matches_line(&re, "acquired connection in_use 5"));
-        assert!(template_matches_line(&re, "acquired connection in_use 4218"));
+        assert!(template_matches_line(
+            &re,
+            "acquired connection in_use 4218"
+        ));
         assert!(!template_matches_line(&re, "released connection in_use 5"));
     }
 
@@ -378,10 +354,10 @@ mod tests {
     #[test]
     fn derive_multi_static_vs_vary() {
         let a_raw = "pool size 10 ready true";
-        let m0 = v(&["pool", "size", "<NUM>", "ready", "true"]);
-        let m1 = v(&["pool", "size", "<NUM>", "ready", "true"]);
-        let m2 = v(&["pool", "size", "<NUM>", "ready", "false"]);
-        // position 4 varies (true/false) -> <*>; <NUM> sentinel -> <*>
+        let m0 = v(&["pool", "size", "10", "ready", "true"]);
+        let m1 = v(&["pool", "size", "12", "ready", "true"]);
+        let m2 = v(&["pool", "size", "99", "ready", "false"]);
+        // positions 2 and 4 vary -> placeholders.
         let t = derive_multi_template(a_raw, &[m0, m1, m2]);
         assert_eq!(t, "pool size <*> ready <*>");
     }
@@ -400,8 +376,8 @@ mod tests {
     #[test]
     fn single_member_all_static() {
         let a_raw = "started worker 7";
-        let m0 = v(&["started", "worker", "<NUM>"]);
+        let m0 = v(&["started", "worker", "7"]);
         let t = derive_multi_template(a_raw, &[m0]);
-        assert_eq!(t, "started worker <*>");
+        assert_eq!(t, "started worker 7");
     }
 }

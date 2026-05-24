@@ -37,7 +37,7 @@ impl Drain {
             max_node_depth: depth - 2,
             sim_th,
             max_children,
-            root_node: Node::new(),
+            root_node: Node::default(),
             extra_delimiters,
             param_str,
             parametrize_numeric_tokens,
@@ -45,11 +45,6 @@ impl Drain {
             id_to_cluster: ClusterStorage::new(max_clusters),
             clusters_counter: 0,
         }
-    }
-
-    /// Create a Drain instance with default parameters.
-    pub fn default() -> Self {
-        Self::new(4, 0.4, 100, None, vec![], "<*>".to_string(), true)
     }
 
     // -----------------------------------------------------------------------
@@ -71,7 +66,7 @@ impl Drain {
 
     /// Ingest a pre-tokenized log line.
     ///
-    /// Same as [`add_log_message`] but skips tokenization — useful when
+    /// Same as [`add_log_message`] but skips tokenization - useful when
     /// preprocessing has already been done (e.g. in the concurrent pipeline).
     pub fn add_log_message_from_tokens(
         &mut self,
@@ -137,7 +132,7 @@ impl Drain {
         full_search()
     }
 
-    /// Convenience wrapper — `match_log` with strategy `"never"`.
+    /// Convenience wrapper - `match_log` with strategy `"never"`.
     pub fn match_default(&self, content: &str) -> Option<LogCluster> {
         self.match_log(content, "never")
     }
@@ -181,10 +176,7 @@ impl Drain {
         for delim in &self.extra_delimiters {
             content = content.replace(delim.as_str(), " ");
         }
-        content
-            .split_whitespace()
-            .map(|s| s.to_string())
-            .collect()
+        content.split_whitespace().map(|s| s.to_string()).collect()
     }
 
     fn has_numbers(s: &str) -> bool {
@@ -196,12 +188,7 @@ impl Drain {
     // -----------------------------------------------------------------------
 
     /// Walk the prefix tree to find the best matching cluster.
-    fn tree_search(
-        &self,
-        tokens: &[String],
-        sim_th: f64,
-        include_params: bool,
-    ) -> Option<usize> {
+    fn tree_search(&self, tokens: &[String], sim_th: f64, include_params: bool) -> Option<usize> {
         let token_count = tokens.len();
         let token_count_str = token_count.to_string();
 
@@ -269,9 +256,7 @@ impl Drain {
                 include_params,
                 &self.param_str,
             );
-            if cur_sim > max_sim
-                || (cur_sim == max_sim && param_count as i64 > max_param_count)
-            {
+            if cur_sim > max_sim || (cur_sim == max_sim && param_count as i64 > max_param_count) {
                 max_sim = cur_sim;
                 max_param_count = param_count as i64;
                 max_cluster = Some(cluster);
@@ -294,10 +279,14 @@ impl Drain {
         let token_count = cluster.log_template_tokens.len();
         let token_count_str = token_count.to_string();
 
-        if !self.root_node.key_to_child_node.contains_key(&token_count_str) {
+        if !self
+            .root_node
+            .key_to_child_node
+            .contains_key(&token_count_str)
+        {
             self.root_node
                 .key_to_child_node
-                .insert(token_count_str.clone(), Node::new());
+                .insert(token_count_str.clone(), Node::default());
         }
 
         let first_layer_node = self
@@ -336,46 +325,43 @@ impl Drain {
                 if self.parametrize_numeric_tokens && Self::has_numbers(token) {
                     if !node.key_to_child_node.contains_key(&self.param_str) {
                         node.key_to_child_node
-                            .insert(self.param_str.clone(), Node::new());
+                            .insert(self.param_str.clone(), Node::default());
                     }
-                    cur_node = node
-                        .key_to_child_node
-                        .get_mut(&self.param_str)
-                        .unwrap() as *mut Node;
+                    cur_node =
+                        node.key_to_child_node.get_mut(&self.param_str).unwrap() as *mut Node;
                 } else if node.key_to_child_node.contains_key(&self.param_str) {
                     if node.key_to_child_node.len() < self.max_children {
-                        node.key_to_child_node.insert(token.clone(), Node::new());
+                        node.key_to_child_node
+                            .insert(token.clone(), Node::default());
                         cur_node =
                             node.key_to_child_node.get_mut(token.as_str()).unwrap() as *mut Node;
                     } else {
-                        cur_node = node
-                            .key_to_child_node
-                            .get_mut(&self.param_str)
-                            .unwrap() as *mut Node;
+                        cur_node =
+                            node.key_to_child_node.get_mut(&self.param_str).unwrap() as *mut Node;
                     }
                 } else {
                     let children_count = node.key_to_child_node.len();
-                    if children_count + 1 < self.max_children {
-                        node.key_to_child_node.insert(token.clone(), Node::new());
-                        cur_node =
-                            node.key_to_child_node.get_mut(token.as_str()).unwrap() as *mut Node;
-                    } else if children_count + 1 == self.max_children {
-                        node.key_to_child_node
-                            .insert(self.param_str.clone(), Node::new());
-                        cur_node = node
-                            .key_to_child_node
-                            .get_mut(&self.param_str)
-                            .unwrap() as *mut Node;
-                    } else {
-                        cur_node = node
-                            .key_to_child_node
-                            .get_mut(&self.param_str)
-                            .unwrap() as *mut Node;
+                    match (children_count + 1).cmp(&self.max_children) {
+                        std::cmp::Ordering::Less => {
+                            node.key_to_child_node
+                                .insert(token.clone(), Node::default());
+                            cur_node = node.key_to_child_node.get_mut(token.as_str()).unwrap()
+                                as *mut Node;
+                        }
+                        std::cmp::Ordering::Equal => {
+                            node.key_to_child_node
+                                .insert(self.param_str.clone(), Node::default());
+                            cur_node = node.key_to_child_node.get_mut(&self.param_str).unwrap()
+                                as *mut Node;
+                        }
+                        std::cmp::Ordering::Greater => {
+                            cur_node = node.key_to_child_node.get_mut(&self.param_str).unwrap()
+                                as *mut Node;
+                        }
                     }
                 }
             } else {
-                cur_node =
-                    node.key_to_child_node.get_mut(token.as_str()).unwrap() as *mut Node;
+                cur_node = node.key_to_child_node.get_mut(token.as_str()).unwrap() as *mut Node;
             }
 
             current_depth += 1;
@@ -404,5 +390,11 @@ impl Drain {
             }
             None => Vec::new(),
         }
+    }
+}
+
+impl Default for Drain {
+    fn default() -> Self {
+        Self::new(4, 0.4, 100, None, vec![], "<*>".to_string(), true)
     }
 }

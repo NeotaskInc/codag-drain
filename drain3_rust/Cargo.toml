@@ -3,6 +3,8 @@ name = "drain3_rust"
 version = "0.1.0"
 edition = "2021"
 description = "Rust implementation of the Drain3 log parsing algorithm"
+license = "MIT"
+publish = false
 
 [dependencies]
 lru = "0.12"

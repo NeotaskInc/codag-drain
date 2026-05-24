@@ -18,3 +18,9 @@ impl Node {
         }
     }
 }
+
+impl Default for Node {
+    fn default() -> Self {
+        Self::new()
+    }
+}

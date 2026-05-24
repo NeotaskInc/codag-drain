@@ -257,12 +257,7 @@ async fn test_concurrent_ordering() {
     let drain = Drain::default();
     let cd = ConcurrentDrain::new(drain, 64);
 
-    let entries = vec![
-        "A format 1",
-        "A format 2",
-        "B format 1",
-        "B format 2",
-    ];
+    let entries = vec!["A format 1", "A format 2", "B format 1", "B format 2"];
 
     for entry in &entries {
         let sync_result = sync_drain.add_log_message(entry);

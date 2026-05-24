@@ -77,10 +77,7 @@ impl ConcurrentDrain {
         for delim in &self.extra_delimiters {
             content = content.replace(delim.as_str(), " ");
         }
-        content
-            .split_whitespace()
-            .map(|s| s.to_string())
-            .collect()
+        content.split_whitespace().map(|s| s.to_string()).collect()
     }
 
     /// Gracefully shut down the pipeline.

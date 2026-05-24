@@ -1,70 +1,16 @@
-//! Session state + line parsing for the codag daemon.
+//! Shared input parsing for the CLI and thin HTTP host.
 //!
-//! A *session* is a long-lived [`StreamingIndex`] keyed by an opaque id. Agents
-//! `POST` log lines into it incrementally and `GET` (or `subscribe` to) the
-//! projected capsule. State lives entirely in memory; sessions idle longer than
-//! [`SESSION_TTL`] are evicted by a background task (see `main.rs`).
+//! This is intentionally shallow metadata extraction. The templater groups only
+//! by `LogLine::message`; timestamp and level are carried through as sample
+//! metadata for agents.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use codag::{CompressorConfig, LogLine, Mode, StreamingIndex};
 use regex::Regex;
 use std::sync::OnceLock;
-use tokio::sync::RwLock;
 
-/// Sessions idle longer than this are evicted by the background sweeper.
-pub const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
-
-/// How often the background sweeper runs.
-pub const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
-
-/// Cadence of SSE capsule snapshots.
-pub const SSE_INTERVAL: Duration = Duration::from_secs(1);
-
-/// One live session: a streaming index plus its last-touch timestamp.
-#[derive(Debug)]
-pub struct SessionEntry {
-    pub index: StreamingIndex,
-    pub last_touch: Instant,
-}
-
-impl SessionEntry {
-    pub fn new() -> Self {
-        SessionEntry::default()
-    }
-}
-
-impl Default for SessionEntry {
-    fn default() -> Self {
-        SessionEntry {
-            // Streaming is structural-only; the stored config's grouper is
-            // ignored, and projections may override the mode per request.
-            index: StreamingIndex::new(CompressorConfig::for_mode(Mode::Balanced)),
-            last_touch: Instant::now(),
-        }
-    }
-}
-
-/// Shared, cloneable application state.
-#[derive(Clone, Default)]
-pub struct AppState {
-    pub sessions: Arc<RwLock<HashMap<String, SessionEntry>>>,
-}
-
-impl AppState {
-    pub fn new() -> Self {
-        AppState::default()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Line parsing (mirrors the CLI's `codag_compress` heuristic).
-// ---------------------------------------------------------------------------
+use crate::compress::LogLine;
 
 fn iso_or_epoch_re() -> &'static Regex {
-    // ISO-8601 (date or datetime, optional ms/tz) or a long epoch (10-13 digits).
+    // ISO-8601 date or datetime, optional ms/tz, or a long epoch.
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
         Regex::new(
@@ -86,32 +32,34 @@ fn is_level_tok(tok: &str) -> bool {
     RAW_LEVELS.contains(&bare.as_str())
 }
 
-/// Heuristically parse one raw text line into a [`LogLine`] (timestamp + level
-/// among the first ~3 tokens, remainder = message). Faithful copy of the CLI's
-/// `parse_raw_line`.
+/// Heuristically parse one raw text line into a [`LogLine`].
+///
+/// The parser recognizes a leading ISO-like timestamp or epoch, then a level
+/// token among the next few fields. The remainder is the message. For
+/// two-token timestamps such as `2026-05-22 14:13:00`, the combined timestamp
+/// is preferred over the date-only prefix.
 pub fn parse_line(line: &str) -> LogLine {
     let tokens: Vec<&str> = line.split_whitespace().collect();
     if tokens.is_empty() {
         return LogLine::new(String::new());
     }
+
     let mut timestamp: Option<String> = None;
     let mut level: Option<String> = None;
     let mut consumed = 0usize;
 
-    // Leading timestamp.
-    if iso_or_epoch_re().is_match(tokens[0]) {
-        timestamp = Some(tokens[0].to_string());
-        consumed = 1;
-    } else if tokens.len() >= 2 {
-        // Common "DATE TIME" two-token form: "2026-05-22 14:13:00".
+    if tokens.len() >= 2 {
         let joined = format!("{} {}", tokens[0], tokens[1]);
         if iso_or_epoch_re().is_match(&joined) {
             timestamp = Some(joined);
             consumed = 2;
         }
     }
+    if timestamp.is_none() && iso_or_epoch_re().is_match(tokens[0]) {
+        timestamp = Some(tokens[0].to_string());
+        consumed = 1;
+    }
 
-    // Level among the next ~3 tokens (after any timestamp).
     let scan_end = (consumed + 3).min(tokens.len());
     for (i, tok) in tokens.iter().enumerate().take(scan_end).skip(consumed) {
         if is_level_tok(tok) {
@@ -137,8 +85,7 @@ pub fn parse_line(line: &str) -> LogLine {
     }
 }
 
-/// Parse one NDJSON line `{"message","level","timestamp"}` into a [`LogLine`].
-/// Returns `None` if the line is not a JSON object with a string `message`.
+/// Parse one NDJSON line `{"message","level","timestamp"}`.
 pub fn parse_json_line(line: &str) -> Option<LogLine> {
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
     let message = v.get("message")?.as_str()?.to_string();
@@ -157,15 +104,15 @@ pub fn parse_json_line(line: &str) -> Option<LogLine> {
     })
 }
 
-/// Whether to treat a body as NDJSON or raw text.
+/// Whether to treat a newline-delimited body as raw text or NDJSON.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodyFormat {
     Text,
     Ndjson,
 }
 
-/// Parse a whole body (newline-delimited) into [`LogLine`]s, skipping blanks.
-/// In NDJSON mode, lines that fail to parse are silently skipped.
+/// Parse a whole newline-delimited body into [`LogLine`]s, skipping blanks. In
+/// NDJSON mode, lines that fail to parse are skipped.
 pub fn parse_body(body: &str, fmt: BodyFormat) -> Vec<LogLine> {
     body.lines()
         .filter(|l| !l.trim().is_empty())
@@ -197,13 +144,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_line_date_then_time_and_level() {
-        // The leading token "2026-05-22" already fully matches the ISO regex
-        // (date-only form), so it is consumed as the timestamp; the time and
-        // level then fall within the next-3-token level scan. This mirrors the
-        // CLI's `parse_raw_line` behavior exactly.
+    fn parse_line_prefers_two_token_timestamp() {
         let l = parse_line("2026-05-22 14:13:00 info worker idle");
-        assert_eq!(l.timestamp.as_deref(), Some("2026-05-22"));
+        assert_eq!(l.timestamp.as_deref(), Some("2026-05-22 14:13:00"));
         assert_eq!(l.level.as_deref(), Some("info"));
         assert_eq!(l.message, "worker idle");
     }

@@ -22,8 +22,14 @@ fn generate_logs(n: usize) -> Vec<String> {
         "Dec 10 11:03:44 LabSZ sshd[25500]: pam_unix(sshd:session): session opened for user {user} by (uid=0)",
         "Dec 10 12:00:00 LabSZ kernel: [UFW BLOCK] IN=eth0 OUT= MAC=00:00:00:00:00:00 SRC=10.0.0.{ip} DST=192.168.1.1 PROTO=TCP SPT={port} DPT=22",
     ];
-    let users = ["root", "admin", "test", "ftpuser", "postgres", "www-data", "pi", "ubuntu"];
-    let hosts = ["scanner1.example.com", "attacker.evil.org", "probe.test.net"];
+    let users = [
+        "root", "admin", "test", "ftpuser", "postgres", "www-data", "pi", "ubuntu",
+    ];
+    let hosts = [
+        "scanner1.example.com",
+        "attacker.evil.org",
+        "probe.test.net",
+    ];
 
     (0..n)
         .map(|i| {
@@ -57,19 +63,13 @@ fn bench_sync(logs: &[String]) -> (std::time::Duration, usize) {
     (elapsed, clusters)
 }
 
-async fn bench_concurrent_parallel(
-    logs: &[String],
-    concurrency: usize,
-) -> std::time::Duration {
+async fn bench_concurrent_parallel(logs: &[String], concurrency: usize) -> std::time::Duration {
     let drain = make_drain_with_masking();
     let cd = Arc::new(ConcurrentDrain::new(drain, 1024));
 
     // Split logs into chunks for each worker
     let chunk_size = (logs.len() + concurrency - 1) / concurrency;
-    let chunks: Vec<Vec<String>> = logs
-        .chunks(chunk_size)
-        .map(|c| c.to_vec())
-        .collect();
+    let chunks: Vec<Vec<String>> = logs.chunks(chunk_size).map(|c| c.to_vec()).collect();
 
     let start = Instant::now();
 
@@ -149,7 +149,9 @@ async fn bench_scale() {
             );
         }
         if n != 100_000 {
-            println!("║──────────┼──────────────┼──────────────┼──────────────┼─────────┼─────────║");
+            println!(
+                "║──────────┼──────────────┼──────────────┼──────────────┼─────────┼─────────║"
+            );
         }
     }
     println!("╚══════════════════════════════════════════════════════════════════════════════╝");

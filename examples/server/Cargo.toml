@@ -1,21 +1,19 @@
 [package]
-name = "codag-server"
+name = "codag-drain-server"
 version = "0.1.0"
 edition = "2021"
-description = "codag real-time capsule daemon — agents stream logs in and subscribe to live IncidentCapsules."
+description = "Reference HTTP host for codag-drain deterministic log templating."
+license = "MIT"
+publish = false
 
 [dependencies]
-codag = { path = "../codag" }
-regex = "1"
+codag-drain = { path = "../../codag-drain" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"] }
 axum = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tower = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tokio-stream = "0.1"
-futures = "0.3"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

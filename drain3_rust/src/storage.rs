@@ -19,9 +19,7 @@ impl ClusterStorage {
     pub fn new(max_clusters: Option<usize>) -> Self {
         match max_clusters {
             None => ClusterStorage::Unlimited(HashMap::new()),
-            Some(cap) => {
-                ClusterStorage::Limited(LruCache::new(NonZeroUsize::new(cap).unwrap()))
-            }
+            Some(cap) => ClusterStorage::Limited(LruCache::new(NonZeroUsize::new(cap).unwrap())),
         }
     }
 

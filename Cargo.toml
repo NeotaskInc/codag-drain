@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["drain3_rust", "codag", "codag-server"]
+members = ["drain3_rust", "codag-drain", "examples/server"]
 
 # codag-drain workspace
-#   drain3_rust  — base streaming Drain3 fork (untouched)
-#   codag        — compression + capsule + streaming-index engine (the IP)
-#   codag-server — long-running real-time capsule daemon
+#   drain3_rust  - vendored Rust Drain3 baseline
+#   codag-drain  - deterministic log templating algorithm
+#   examples/server - reference HTTP host for templating tests/service wiring

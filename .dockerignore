@@ -1,0 +1,8 @@
+.git
+target
+**/target
+*.log
+*.gz
+dist
+MANIFEST
+drain3.egg-info
