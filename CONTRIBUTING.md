@@ -1,8 +1,8 @@
 # Contributing
 
-`codag-drain` is intentionally narrow: deterministic log templating for
-agent-facing log artifacts. Keep incident diagnosis, root-cause inference, and
-policy decisions out of this repo.
+`codag-drain` is intentionally narrow: real-time, deterministic log compression
+for agents. It turns raw log streams into compact, template-grouped artifacts and
+nothing more. Whatever interprets those artifacts lives elsewhere.
 
 ## Development Checks
 

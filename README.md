@@ -1,11 +1,16 @@
 # codag-drain
 
-Deterministic log templating for `codag wrap`.
+Real-time log compression for agents.
 
-This repository is intentionally narrow. It turns log lines into template groups
-with bounded raw examples and slot summaries. It does not diagnose incidents,
-assign root cause, or build incident summaries; those belong to the inference
-pipeline.
+`codag-drain` adapts [Drain3](https://github.com/logpai/Drain3) into a streaming
+log-templating engine. It collapses high-volume, repetitive log lines into a
+compact set of template groups — each with a few raw samples and slot summaries —
+so an agent can take in a large, noisy log window without spending its context
+budget on near-duplicate lines.
+
+That is the whole job. It is the compression layer behind `codag wrap`: turn a
+raw log stream into a small, agent-readable artifact, in real time, as lines
+arrive. What reads that artifact decides what it means.
 
 ## Workspace
 
