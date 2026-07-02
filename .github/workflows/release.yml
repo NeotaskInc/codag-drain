@@ -1,0 +1,76 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset: codag-drain_darwin_arm64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset: codag-drain_darwin_amd64
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset: codag-drain_linux_amd64
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            asset: codag-drain_windows_amd64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install target
+        run: rustup target add ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release -p codag-drain --target ${{ matrix.target }}
+      - name: Stage asset (posix)
+        if: runner.os != 'Windows'
+        run: |
+          cp "target/${{ matrix.target }}/release/codag-drain" "${{ matrix.asset }}"
+          strip "${{ matrix.asset }}" || true
+          chmod 755 "${{ matrix.asset }}"
+      - name: Stage asset (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cp "target/${{ matrix.target }}/release/codag-drain.exe" "${{ matrix.asset }}"
+      - name: Smoke test (native archs only)
+        if: matrix.target != 'aarch64-apple-darwin' || runner.os == 'macOS'
+        shell: bash
+        run: printf 'worker ready shard=1\nworker ready shard=2\n' | "./${{ matrix.asset }}" --stats
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd assets
+          shasum -a 256 codag-drain_* > checksums.txt
+          cat checksums.txt
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" assets/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "codag-drain ${GITHUB_REF_NAME}" \
+            --notes "Neotask build of codag-drain (MIT). Static per-platform binaries for the Neotask log-lens gateway plugin. Upstream: codag-megalith/codag-drain @ 5a84fb050e074b15474fdb264c9e97faaa66c9f5."
