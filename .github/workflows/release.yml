@@ -21,8 +21,8 @@ jobs:
           # - os: blacksmith-6vcpu-macos-15
           #   target: x86_64-apple-darwin
           #   asset: codag-drain_darwin_amd64
-          # glibc-linked build: 22.04 keeps the shipped binary's GLIBC_2.34
-          # floor; building on 24.04 could raise it past older distributions.
+          # glibc-linked build: linking on 22.04 (glibc 2.35) caps the binary's
+          # glibc requirement at 2.35; a 24.04 host would allow up to 2.39.
           - os: blacksmith-4vcpu-ubuntu-2204
             target: x86_64-unknown-linux-gnu
             asset: codag-drain_linux_amd64
